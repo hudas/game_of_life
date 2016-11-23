@@ -1,6 +1,7 @@
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  *
@@ -16,15 +17,17 @@ import java.util.Random;
 public class Main {
 
     // Pasaulio dydis
-    public static final int WORLD_SIZE = 1002;
+    public static final int WORLD_SIZE = 12;
 
-    public static final int YEARS_TO_LIVE = 100;
+    public static final int YEARS_TO_LIVE = 10;
 
     // Pasaulis - baitų masyvas
     private static boolean[][] world = new boolean[WORLD_SIZE][WORLD_SIZE]; // Laikome, kad pasaulis kvadratinis
     private static boolean[][] next_world = new boolean[WORLD_SIZE][WORLD_SIZE]; // Bufferis sekančio pasaulio konstravimui.
 
-    public static void main(String[] args) {
+    private static AtomicInteger processedLines;
+
+    public static void main(String[] args) throws InterruptedException {
         Random random = new Random(System.currentTimeMillis());
 
         // Specialiai iteruojama ne per visą pasaulį,
@@ -36,26 +39,31 @@ public class Main {
             }
         }
 
-        List<Thread> workerPool = new ArrayList<>();
+
 
         long startMillis = System.currentTimeMillis();
         int yearsPassed = 0;
-        while(yearsPassed < YEARS_TO_LIVE) {
 
-            for (int i = 1; i < WORLD_SIZE - 1; i ++) {
-                // Perduodame objektą kurį užpildys. Gauname ganėtinai efektyvų darbą - visos gijos naudosis 1. ReadOnly resursu world.
-                // Ir kiekviena gija pildo savo stulpelį, todėl nėra kritinių sekcijų.
-                processLine(i, next_world[i]);
+        while(yearsPassed < YEARS_TO_LIVE) {
+            WorkCounter counter = new WorkCounter(WORLD_SIZE - 2);
+
+            List<Worker> workerPool = new ArrayList<>();
+            workerPool.add(new Worker());
+            workerPool.add(new Worker());
+
+            for (Worker worker : workerPool) {
+                worker.setEnvironment(world, next_world, counter);
+                worker.start();
             }
 
+            counter.awaitDone();
+            System.out.println("Sulaukiau!");
             swapWorlds();
-//            printWorld(world);
+            printWorld(world);
             yearsPassed++;
         }
         long endMillis = System.currentTimeMillis();
         System.out.println("Užtruko: " + (endMillis - startMillis));
-
-        System.out.println("Hello World!");
     }
 
     // Nelabai gražus taučiau taupome objektus.
@@ -139,4 +147,76 @@ public class Main {
             System.out.println();
         }
     }
+
+    private static class Worker extends Thread {
+
+        // Reference to world which he operates in.
+        // This world is immutable from worker viewpoint
+        private boolean[][] world;
+        private boolean[][] nextWorld;
+
+        private WorkCounter counter;
+
+        public void setEnvironment(boolean[][] world, boolean[][] nextWorld, WorkCounter counter) {
+            this.world = world;
+            this.nextWorld = nextWorld;
+            this.counter = counter;
+        }
+
+
+        @Override
+        public void run(){
+            System.out.println("Pradedam");
+            Integer work = counter.getWork();
+            while (work != null) {
+                // Perduodame objektą kurį užpildys. Gauname ganėtinai efektyvų darbą - visos gijos naudosis 1. ReadOnly resursu world.
+                // Ir kiekviena gija pildo savo stulpelį, todėl nėra kritinių sekcijų.
+                processLine(work, nextWorld[work]);
+//                System.out.println("Baigiau stulpeli!" + work);
+                work = counter.getWork();
+            }
+
+//            System.out.println("Baigiau!");
+        }
+    }
+
+    private static class WorkCounter {
+
+        private int workUnits;
+        private int value = 1;
+
+        public WorkCounter(int workUnits) {
+            this.workUnits = workUnits;
+        }
+
+        synchronized public Integer getWork() {
+            if (value >= workUnits) {
+                return null;
+            }
+
+            Integer result = new Integer(value);
+            advance();
+            return result;
+        }
+
+        synchronized public void advance() {
+            value++;
+            this.notifyAll();
+        }
+
+        synchronized public void awaitDone() throws InterruptedException {
+            if (value <= 0) {
+                return;
+            }
+
+            while (true) {
+                this.wait();
+                if (value >= workUnits) {
+                    break;
+                }
+            }
+        }
+    }
+
 }
+
